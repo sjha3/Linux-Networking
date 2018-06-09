@@ -1,0 +1,228 @@
+#########################  Setting up  OVS bridge and create a VM connected to this bridge
+1. alias vc=ovs-vsctl"
+2. vs add-br sum-br
+3. ip link set sum-br up
+4. cp arp-net.xml sum-net.xml
+
+5. vi sum-net.xml
+<network>
+  <name>sum-br</name>
+  <uuid>de6d3904-1029-4da3-997c-ce10a3dc6372</uuid>
+  <forward mode='bridge'/>
+  <bridge name='sum-br'/>
+  <virtualport type='openvswitch'/>
+</network>
+NOTE : uuid is provided at run time, so remove it before net-define command
+===========================================================================
+6. virsh net-define sum-br.xml
+7. virsh net-start sum-br
+
+Note : net-start takes file name without xml as argument
+===========================================================================
+8. root@bn20-210:/etc/libvirt/qemu/networks# ovs-vsctl show
+33773424-4ae2-405c-b5da-57da0b4607af
+    Bridge arp-br
+        Port arp-br
+            Interface arp-br
+                type: internal
+    Bridge sum-br
+        Port sum-br
+            Interface sum-br
+                type: internal
+
+9. root@bn20-210:/etc/libvirt/qemu/networks# virsh net-list
+ Name                 State      Autostart     Persistent
+----------------------------------------------------------
+ default              active     yes           yes
+ ovs-net              active     no            yes
+ sum-br               active     no            yes
+
+========== Command to create a VM ==========
+	sudo virt-install -n sumit_vm -r 512 --vcpu=1 --disk path=/var/lib/libvirt/images/sumit_vm.img,size=16 --network network=sum-br -c /home/asakhuj/CentOS-7-x86_64-Minimal-1708.iso -v
+Note : network is sum-br here which makes sure that this vm is connected to sum-br ovs bridge
+
+=========== Assign IP address to VM and OVS ===========
+OVS : ip addr add 10.0.0.1/24 dev sum-br 
+VM : ip addr add 10.0.0.2/24 dev eth0
+Add default route at VM : ip route add default via 10.0.0.1
+Now VM can ping ovs but not outside world.
+
+===========IP Table rule addition ==========
+We need to add IP table rules for doing NAT as shown below:
+	iptables -t nat -A POSTROUTING -p icmp -s 10.0.0.2 -j MASQUERADE
+Now, ping to 8.8.8.8 works and a tcpdump on sum-br shows packet going through this ovs bridge
+root@bn20-210:/home/asakhuj# tcpdump -nni sum-br
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on sum-br, link-type EN10MB (Ethernet), capture size 262144 bytes
+11:51:20.608687 IP 10.0.0.2 > 8.8.8.8: ICMP echo request, id 9279, seq 1, length 64
+11:51:20.619248 IP 8.8.8.8 > 10.0.0.2: ICMP echo reply, id 9279, seq 1, length 64
+11:51:21.609956 IP 10.0.0.2 > 8.8.8.8: ICMP echo request, id 9279, seq 2, length 64
+11:51:21.620356 IP 8.8.8.8 > 10.0.0.2: ICMP echo reply, id 9279, seq 2, length 64
+11:51:22.612416 IP 10.0.0.2 > 8.8.8.8: ICMP echo request, id 9279, seq 3, length 64
+11:51:22.622969 IP 8.8.8.8 > 10.0.0.2: ICMP echo reply, id 9279, seq 3, length 64
+11:51:23.613796 IP 10.0.0.2 > 8.8.8.8: ICMP echo request, id 9279, seq 4, length 64
+11:51:23.624276 IP 8.8.8.8 > 10.0.0.2: ICMP echo reply, id 9279, seq 4, length 64
+
+
+
+#########################  Setting up  VxLAN Tunnel between VMs connected to OVSes on different host machines
+
+root@bn20-24:/etc/libvirt/qemu/networks# virsh net-list
+ Name                 State      Autostart     Persistent
+----------------------------------------------------------
+ default              active     yes           yes
+ net2                 active     no            yes
+ ovs-network          active     no            yes
+ sum-br               active     no            yes
+
+
+
+root@bn20-24:/etc/libvirt/qemu/networks#ovs-vsctl add-port sum-br vxlan0 -- set interface vxlan0 type=vxlan options:local_ip=10.25.11.174 options:remote_ip=10.25.11.204
+
+root@bn20-24:/etc/libvirt/qemu/networks# ovs-vsctl show
+de7bb933-54dc-42eb-8edb-be150e56659b
+    Bridge sum-br
+        Port "vnet1"
+            Interface "vnet1"
+        Port "vnet0"
+            Interface "vnet0"
+        Port "vxlan0"
+            Interface "vxlan0"
+                type: vxlan
+                options: {local_ip="10.25.11.174", remote_ip="10.25.11.204"}
+        Port sum-br
+            Interface sum-br
+                type: internal
+
+Do similar config on host machine 2
+NOTE : local/remote IPs are IP addresses of eth0 of host machines
+When a ping is started between VMs on both host machine, TCPDUMP on eth0 of both machines show ping packets with src/dst as IP addr of eth0 of both machines.
+If there is no firewall, ping works between VMs.
+
+
+
+#########################  Communication between VMs on different OVSes in same host machine
+
+VM1 (10.0.0.20) === OVS1 (10.0.0.19)
+VM2 (20.0.0.21) ===== OVS2 (20.0.0.19)
+
+NOTE : Host machine can reach both OVS directly
+
+
+==== DUMPS at HOST MACHINE ============
+
+root@bn20-24:/home/asakhuj# ovs-vsctl show
+de7bb933-54dc-42eb-8edb-be150e56659b
+    Bridge sum-ovs
+        Port "vnet1"
+            Interface "vnet1"
+        Port "vnet0"
+            Interface "vnet0"
+        Port "vxlan0"
+            Interface "vxlan0"
+                type: vxlan
+                options: {local_ip="152.46.20.24", remote_ip="152.46.20.210"}
+        Port sum-ovs
+            Interface sum-ovs
+                type: internal
+    Bridge "sum-ovs1"
+        Port "sum-ovs1"
+            Interface "sum-ovs1"
+                type: internal
+        Port "vnet2"
+            Interface "vnet2"
+        Port "vnet3"
+            Interface "vnet3"
+    ovs_version: "2.5.4"
+
+root@bn20-24:/home/asakhuj# ifconfig sum-ovs1
+sum-ovs1  Link encap:Ethernet  HWaddr 2e:b7:e4:fa:04:4b
+          inet addr:20.0.0.19  Bcast:0.0.0.0  Mask:255.255.255.0
+          inet6 addr: fe80::2cb7:e4ff:fefa:44b/64 Scope:Link
+          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
+          RX packets:26 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:94 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1
+          RX bytes:1904 (1.9 KB)  TX bytes:10954 (10.9 KB)
+
+root@bn20-24:/home/asakhuj# ifconfig sum-ovs
+sum-ovs   Link encap:Ethernet  HWaddr d2:0e:7f:cd:fa:47
+          inet addr:10.0.0.19  Bcast:0.0.0.0  Mask:255.255.254.0
+          inet6 addr: fe80::d00e:7fff:fecd:fa47/64 Scope:Link
+          UP BROADCAST RUNNING MULTICAST  MTU:1500  Metric:1
+          RX packets:88 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:139 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1
+          RX bytes:5488 (5.4 KB)  TX bytes:15227 (15.2 KB)
+
+		  
+root@bn20-24:/home/asakhuj# ip route
+default via 152.46.23.254 dev eth1
+10.0.0.0/23 dev sum-ovs  proto kernel  scope link  src 10.0.0.19
+10.25.0.0/20 dev eth0  proto kernel  scope link  src 10.25.11.174
+20.0.0.0/24 dev sum-ovs1  proto kernel  scope link  src 20.0.0.19
+152.46.16.0/21 dev eth1  proto kernel  scope link  src 152.46.20.24
+169.254.0.0/16 dev eth0  scope link  metric 1000
+192.168.122.0/24 dev virbr0  proto kernel  scope link  src 192.168.122.1 linkdown
+
+
+====Ping to sum-ovs====
+root@bn20-24:/home/asakhuj# ping 10.0.0.19
+PING 10.0.0.19 (10.0.0.19) 56(84) bytes of data.
+64 bytes from 10.0.0.19: icmp_seq=1 ttl=64 time=0.103 ms
+64 bytes from 10.0.0.19: icmp_seq=2 ttl=64 time=0.060 ms
+
+
+==== Ping to VM behind sum-ovs =====
+root@bn20-24:/home/asakhuj# ping 10.0.0.20
+PING 10.0.0.20 (10.0.0.20) 56(84) bytes of data.
+64 bytes from 10.0.0.20: icmp_seq=1 ttl=64 time=2.27 ms
+64 bytes from 10.0.0.20: icmp_seq=2 ttl=64 time=0.396 ms
+64 bytes from 10.0.0.20: icmp_seq=3 ttl=64 time=0.351 ms
+
+
+====Ping to sum-ovs1====
+root@bn20-24:/home/asakhuj# ping 20.0.0.19
+PING 20.0.0.19 (20.0.0.19) 56(84) bytes of data.
+64 bytes from 20.0.0.19: icmp_seq=1 ttl=64 time=0.126 ms
+64 bytes from 20.0.0.19: icmp_seq=2 ttl=64 time=0.075 ms
+
+==== Ping to VM behind sum-ovs1 =====
+root@bn20-24:/home/asakhuj# ping 20.0.0.21
+PING 20.0.0.21 (20.0.0.21) 56(84) bytes of data.
+64 bytes from 20.0.0.21: icmp_seq=1 ttl=64 time=2.00 ms
+64 bytes from 20.0.0.21: icmp_seq=2 ttl=64 time=0.543 ms
+
+
+
+ROUTES : As, shown in route at host , it has route to both sum-ovs and sum-ovs1.
+Also,  default routes on VMs are to their respective OVSs
+Thus, host can reach ovs as well as VMs behing them.
+
+
+====== Ping from VM1 to VM2 ========
+Also VM1 can reach VM2 as well as shown below 
+
+root@bn20-24:/home/asakhuj# ssh-copy-id root@10.0.0.20
+/usr/bin/ssh-copy-id: INFO: Source of key(s) to be installed: "/root/.ssh/id_rsa.pub"
+/usr/bin/ssh-copy-id: INFO: attempting to log in with the new key(s), to filter out any that are already installed
+/usr/bin/ssh-copy-id: INFO: 1 key(s) remain to be installed -- if you are prompted now it is to install the new keys
+root@10.0.0.20's password:
+
+Number of key(s) added: 1
+
+Now try logging into the machine, with:   "ssh 'root@10.0.0.20'"
+and check to make sure that only the key(s) you wanted were added.
+
+root@bn20-24:/home/asakhuj# ssh root@10.0.0.20
+Last login: Sat Jun  9 13:17:04 2018
+[root@localhost ~]#
+[root@localhost ~]#
+[root@localhost ~]# ping 20.0.0.21
+PING 20.0.0.21 (20.0.0.21) 56(84) bytes of data.
+64 bytes from 20.0.0.21: icmp_seq=1 ttl=63 time=2.03 ms
+64 bytes from 20.0.0.21: icmp_seq=2 ttl=63 time=0.840 ms
+64 bytes from 20.0.0.21: icmp_seq=3 ttl=63 time=0.866 ms
+
+
+
