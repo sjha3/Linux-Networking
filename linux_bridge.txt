@@ -1,0 +1,133 @@
+1. sudo apt-get install qemu-kvm
+2. kvm-ok
+asakhuj@bn19-8:~$ kvm-ok
+INFO: /dev/kvm exists
+KVM acceleration can be used
+
+===================================================================
+asakhuj@bn19-8:~$ lscpu
+Architecture:          x86_64
+CPU op-mode(s):        32-bit, 64-bit
+Byte Order:            Little Endian
+CPU(s):                2
+On-line CPU(s) list:   0,1
+Thread(s) per core:    1
+Core(s) per socket:    1
+Socket(s):             2
+NUMA node(s):          1
+Vendor ID:             GenuineIntel
+CPU family:            6
+Model:                 94
+Model name:            Intel Core Processor (Skylake)
+Stepping:              3
+CPU MHz:               1999.998
+BogoMIPS:              3999.99
+Virtualization:        VT-x
+Hypervisor vendor:     KVM
+Virtualization type:   full
+L1d cache:             32K
+L1i cache:             32K
+L2 cache:              4096K
+L3 cache:              16384K
+NUMA node0 CPU(s):     0,1
+Flags:                 fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss syscall nx pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology eagerfpu pni pclmulqdq vmx ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch invpcid_single kaiser tpr_shadow vnmi flexpriority ept vpid fsgsbase tsc_adjust bmi1 hle avx2 smep bmi2 erms invpcid rtm rdseed adx smap xsaveopt arat
+
+===================================================================
+asakhuj@bn19-8:~$ modinfo kvm
+filename:       /lib/modules/4.4.0-109-generic/kernel/arch/x86/kvm/kvm.ko
+license:        GPL
+author:         Qumranet
+srcversion:     A0F656E82FB7304A3B60E02
+depends:        irqbypass
+intree:         Y
+vermagic:       4.4.0-109-generic SMP mod_unload modversions
+parm:           allow_unsafe_assigned_interrupts:Enable device assignment on platforms without interrupt remapping support. (bool)
+parm:           ignore_msrs:bool
+parm:           min_timer_period_us:uint
+parm:           kvmclock_periodic_sync:bool
+parm:           tsc_tolerance_ppm:uint
+parm:           lapic_timer_advance_ns:uint
+parm:           halt_poll_ns:uint
+parm:           halt_poll_ns_grow:int
+parm:           halt_poll_ns_shrink:int
+asakhuj@bn19-8:~$
+
+
+==================  INSTALL LIBVERT ===================
+sudo apt install libvirt-bin virt-manager virt-viewer virtinst
+
+
+================= Deafult bridge in Linux==============
+asakhuj@bn19-8:~$ ip link
+5: virbr0-nic: <BROADCAST,MULTICAST> mtu 1500 qdisc pfifo_fast state DOWN mode DEFAULT group default qlen 1000
+    link/ether 52:54:00:ee:4f:2c brd ff:ff:ff:ff:ff:ff
+
+asakhuj@bn19-8:~$ sudo virsh net-list --all
+ Name                 State      Autostart     Persistent
+----------------------------------------------------------
+ default              active     yes           yes
+
+asakhuj@bn19-8:/etc/libvirt/qemu/networks$ pwd
+/etc/libvirt/qemu/networks
+asakhuj@bn19-8:/etc/libvirt/qemu/networks$ ls
+autostart  default.xml
+asakhuj@bn19-8:/etc/libvirt/qemu/networks cat default.xml
+
+<network>
+  <name>default</name>
+  <uuid>ca7b265f-1a48-4f53-a5ed-dd3474841437</uuid>
+  <forward mode='nat'/>
+  <bridge name='virbr0' stp='on' delay='0'/>
+  <mac address='52:54:00:ee:4f:2c'/>
+  <ip address='192.168.122.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.122.2' end='192.168.122.254'/>
+    </dhcp>
+  </ip>
+</network>
+
+asakhuj@bn19-8:/etc/libvirt/qemu/networks$ route -n
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+0.0.0.0         152.46.23.254   0.0.0.0         UG    0      0        0 eth1
+10.25.0.0       0.0.0.0         255.255.240.0   U     0      0        0 eth0
+152.46.16.0     0.0.0.0         255.255.248.0   U     0      0        0 eth1
+169.254.0.0     0.0.0.0         255.255.0.0     U     1000   0        0 eth0
+=>192.168.122.0   0.0.0.0         255.255.255.0   U     0      0        0 virbr0
+
+NOTE : This default bridge virbr0 is present but is not being used as there is no VM in this system now. 
+As this bridge is in nat mode, the IP address of VM created will be in same subnet
+
+========== Command to create a VM =================
+sudo virt-install -n sumit_vm -r 512 --vcpu=1 --disk path=/var/lib/libvirt/images/sumit_vm.img,size=16 --network network=default -c /home/asakhuj/CentOS-7-x86_64-Minimal-1708.iso -v
+
+
+asakhuj@bn19-8:~$ sudo virsh list --all
+ Id    Name                           State
+----------------------------------------------------
+ 2     sumit_vm                       running
+
+=========== Ping to Google from VM ================
+Make sure there is a default route in VM
+vm# ping 8.8.8.8
+ 
+
+1. TCPDUMP at virbr0  shows src IP as IP of VM (not virb0 IP)
+asakhuj@bn19-8:~$ sudo tcpdump -nni virbr0
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on virbr0, link-type EN10MB (Ethernet), capture size 262144 bytes
+16:35:28.844955 IP 192.168.122.113 > 8.8.8.8: ICMP echo request, id 8410, seq 1, length 64
+16:35:28.860739 IP 8.8.8.8 > 192.168.122.113: ICMP echo reply, id 8410, seq 1, length 64
+16:35:29.846347 IP 192.168.122.113 > 8.8.8.8: ICMP echo request, id 8410, seq 2, length 64
+16:35:29.856812 IP 8.8.8.8 > 192.168.122.113: ICMP echo reply, id 8410, seq 2, length 64
+
+2. TCMPDUMP at eth1 shows src IP address of eth1 (NAT is done here)
+asakhuj@bn19-8:~$ sudo tcpdump -nni eth1 | grep 8.8.8.8
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on eth1, link-type EN10MB (Ethernet), capture size 262144 bytes
+16:35:41.891783 IP 152.46.19.8 > 8.8.8.8: ICMP echo request, id 8411, seq 1, length 64
+16:35:41.902164 IP 8.8.8.8 > 152.46.19.8: ICMP echo reply, id 8411, seq 1, length 64
+16:35:42.893464 IP 152.46.19.8 > 8.8.8.8: ICMP echo request, id 8411, seq 2, length 64
+16:35:42.903927 IP 8.8.8.8 > 152.46.19.8: ICMP echo reply, id 8411, seq 2, length 64
+16:35:43.895154 IP 152.46.19.8 > 8.8.8.8: ICMP echo request, id 8411, seq 3, length 64
+
